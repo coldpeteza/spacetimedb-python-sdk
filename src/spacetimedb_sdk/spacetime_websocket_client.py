@@ -4,6 +4,32 @@ import base64
 import binascii
 
 
+def _is_oidc_token(token: str) -> bool:
+    """Return True if *token* looks like a JWT/OIDC Bearer token.
+
+    JWTs are three base64url segments separated by dots; the header segment
+    always decodes to a JSON object, so its base64url encoding starts with
+    'eyJ' (the encoding of '{"').
+    """
+    return isinstance(token, str) and token.startswith("eyJ") and token.count(".") == 2
+
+
+def _build_auth_headers(auth_token: str) -> dict:
+    """Return the appropriate ``Authorization`` header dict for *auth_token*.
+
+    - No token  → ``None`` (no header added)
+    - OIDC/JWT  → ``Bearer <token>``
+    - Legacy    → ``Basic base64("token:<token>")``
+    """
+    if not auth_token:
+        return None
+    if _is_oidc_token(auth_token):
+        return {"Authorization": f"Bearer {auth_token}"}
+    token_bytes = bytes(f"token:{auth_token}", "utf-8")
+    base64_str = base64.b64encode(token_bytes).decode("utf-8")
+    return {"Authorization": f"Basic {base64_str}"}
+
+
 class WebSocketClient:
     def __init__(self, protocol, on_connect=None, on_close=None, on_error=None, on_message=None, client_address=None):
         self._on_connect = on_connect
@@ -29,22 +55,14 @@ class WebSocketClient:
         self.host = host
         self.name_or_address = name_or_address
 
-        ws_header = None
-        if auth:
-            token_bytes = bytes(f"token:{auth}", "utf-8")
-            base64_str = base64.b64encode(token_bytes).decode("utf-8")
-            headers = {
-                "Authorization": f"Basic {base64_str}",
-            }
-        else:
-            headers = None
+        headers = _build_auth_headers(auth)
 
         self.ws = websocket.WebSocketApp(url,
                                          on_open=self.on_open,
                                          on_message=self.on_message,
                                          on_error=self.on_error,
-                                         on_close=self.on_close, 
-                                         header=headers, 
+                                         on_close=self.on_close,
+                                         header=headers,
                                          subprotocols=[self.protocol])
 
         self.message_thread = threading.Thread(target=self.ws.run_forever)

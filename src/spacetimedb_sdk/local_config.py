@@ -29,6 +29,10 @@ import sys
 config = None
 settings_path = None
 
+# Well-known config keys for token storage
+_TOKEN_KEY = "auth_token"
+_REFRESH_TOKEN_KEY = "refresh_token"
+
 
 def init(config_folder=None, config_file=None, config_root=None, config_defaults=None):
     """
@@ -108,6 +112,35 @@ def set_string(key, value):
     # Update config values at runtime
     config["main"][key] = value
     _save()
+
+
+def is_oidc_token(token: str) -> bool:
+    """Return True if *token* looks like a JWT/OIDC Bearer token.
+
+    JWTs are three base64url segments separated by dots; the header always
+    decodes to a JSON object so its base64url encoding starts with 'eyJ'.
+    """
+    return isinstance(token, str) and token.startswith("eyJ") and token.count(".") == 2
+
+
+def get_token() -> str:
+    """Return the stored auth token (opaque or OIDC), or None if not set."""
+    return get_string(_TOKEN_KEY)
+
+
+def set_token(token: str) -> None:
+    """Persist *token* as the auth token (opaque or OIDC)."""
+    set_string(_TOKEN_KEY, token)
+
+
+def get_refresh_token() -> str:
+    """Return the stored OIDC refresh token, or None if not set."""
+    return get_string(_REFRESH_TOKEN_KEY)
+
+
+def set_refresh_token(refresh_token: str) -> None:
+    """Persist *refresh_token* for future OIDC token refresh flows."""
+    set_string(_REFRESH_TOKEN_KEY, refresh_token)
 
 
 def _save():
