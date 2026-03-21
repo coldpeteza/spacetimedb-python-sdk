@@ -24,7 +24,7 @@ import struct as _struct
 
 try:
     import bsatn_native as _native
-    _USE_NATIVE = True
+    _USE_NATIVE = hasattr(_native, 'encode_u8')
 except ImportError:
     _native = None
     _USE_NATIVE = False
