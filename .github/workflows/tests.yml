@@ -45,11 +45,13 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install maturin and pytest
-        run: pip install maturin pytest
+      - name: Create virtualenv and install maturin and pytest
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
 
       - name: Build and install native extension
-        run: maturin develop --manifest-path bsatn-native/Cargo.toml
+        run: .venv/bin/maturin develop --manifest-path bsatn-native/Cargo.toml
 
       - name: Run tests (native extension)
-        run: PYTHONPATH=src pytest tests/ -v
+        run: PYTHONPATH=src .venv/bin/pytest tests/ -v
