@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # ── Job 1: pure Python (no Rust toolchain required) ────────────────────────
+  test-pure-python:
+    name: "Python ${{ matrix.python-version }} (pure Python)"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run tests (pure Python fallback)
+        run: PYTHONPATH=src pytest tests/ -v
+        # bsatn_native won't be importable → bsatn.py falls back to struct
+
+  # ── Job 2: native Rust extension ───────────────────────────────────────────
+  test-native:
+    name: "Python 3.12 (Rust native extension)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install maturin and pytest
+        run: pip install maturin pytest
+
+      - name: Build and install native extension
+        run: maturin develop --manifest-path bsatn-native/Cargo.toml
+
+      - name: Run tests (native extension)
+        run: PYTHONPATH=src pytest tests/ -v

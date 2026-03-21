@@ -141,6 +141,10 @@ def decode_string(buf: bytes, offset: int) -> tuple:
         return _native.decode_string(buf, offset)
     (length,) = _struct.unpack_from('<I', buf, offset)
     start = offset + 4
+    if len(buf) < start + length:
+        raise ValueError(
+            f"buffer too short for string: need {length} bytes at offset {start}, have {len(buf) - start}"
+        )
     return (buf[start:start + length].decode('utf-8'), start + length)
 
 # ── raw bytes ─────────────────────────────────────────────────────────────────

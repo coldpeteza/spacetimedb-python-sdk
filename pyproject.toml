@@ -13,6 +13,9 @@ dependencies = [
     "configparser",
 ]
 version = "0.7.0"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
 readme = "README.md"
 
 # urls
@@ -27,5 +30,5 @@ python-source = "src"
 # The Rust extension module name (must match #[pymodule] fn name in lib.rs)
 module-name = "bsatn_native"
 # Path to the Rust crate manifest
-manifest-path = "bsatn_native/Cargo.toml"
+manifest-path = "bsatn-native/Cargo.toml"
 features = ["pyo3/extension-module"]
