@@ -3,6 +3,13 @@ import threading
 import base64
 import binascii
 
+try:
+    import websockets
+    import websockets.exceptions
+    _WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    _WEBSOCKETS_AVAILABLE = False
+
 
 def _is_oidc_token(token: str) -> bool:
     """Return True if *token* looks like a JWT/OIDC Bearer token.
@@ -105,3 +112,49 @@ class WebSocketClient:
     def on_close(self, ws, status_code, close_msg):
         if self._on_close:
             self._on_close(close_msg)
+
+
+class AsyncWebSocketClient:
+    """Async WebSocket client using the ``websockets`` library.
+
+    Replaces the threaded ``WebSocketClient`` for use with
+    ``SpacetimeDBAsyncClient``, eliminating the background thread and the
+    100 ms polling hack.  Requires the ``websockets`` package.
+    """
+
+    def __init__(self, protocol: str):
+        if not _WEBSOCKETS_AVAILABLE:
+            raise RuntimeError(
+                "The 'websockets' package is required for AsyncWebSocketClient. "
+                "Install it with: pip install websockets"
+            )
+        self.protocol = protocol
+        self._ws = None
+
+    async def connect(self, auth_token: str, host: str, name_or_address: str, ssl_enabled: bool):
+        """Open the WebSocket connection to the SpacetimeDB server."""
+        proto = "wss" if ssl_enabled else "ws"
+        url = f"{proto}://{host}/database/subscribe/{name_or_address}"
+
+        headers = _build_auth_headers(auth_token)
+        additional_headers = dict(headers) if headers else {}
+
+        self._ws = await websockets.connect(
+            url,
+            subprotocols=[self.protocol],
+            additional_headers=additional_headers,
+        )
+
+    def __aiter__(self):
+        return self._ws.__aiter__()
+
+    async def send(self, data):
+        """Send *data* over the WebSocket (str or bytes)."""
+        if isinstance(data, (bytes, bytearray)):
+            data = data.decode("utf-8")
+        await self._ws.send(data)
+
+    async def close(self):
+        """Close the WebSocket connection gracefully."""
+        if self._ws is not None:
+            await self._ws.close()

@@ -23,7 +23,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install pytest websocket-client
+        run: pip install pytest websocket-client "websockets>=10.0" pytest-asyncio
 
       - name: Run tests (pure Python fallback)
         run: PYTHONPATH=src pytest tests/ -v
@@ -48,7 +48,7 @@ jobs:
       - name: Create virtualenv and install maturin and pytest
         run: |
           python -m venv .venv
-          .venv/bin/pip install maturin pytest websocket-client
+          .venv/bin/pip install maturin pytest websocket-client "websockets>=10.0" pytest-asyncio
 
       - name: Build and install native extension
         run: .venv/bin/maturin develop --manifest-path bsatn-native/Cargo.toml
