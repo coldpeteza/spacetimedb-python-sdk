@@ -13,10 +13,10 @@ dependencies = [
     "configparser",
 ]
 version = "0.7.0"
+readme = "README.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
-readme = "README.md"
 
 # urls
 # Should describe where to find useful info for your project
