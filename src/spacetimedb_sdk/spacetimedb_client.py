@@ -189,18 +189,13 @@ class ReducerEvent:
 
 
 class TransactionUpdateMessage(_ClientApiMessage):
-    # This docstring appears incorrect
     """
     Represents a transaction update message. Used in on_event callbacks.
 
     For more details, see `spacetimedb_client.SpacetimeDBClient.register_on_event`
 
     Attributes:
-        caller_identity (str): The identity of the caller.
-        status (str): The status of the transaction.
-        message (str): A message associated with the transaction update.
-        reducer (str): The reducer used for the transaction.
-        args (dict): Additional arguments for the transaction.
+        reducer_event (ReducerEvent): The reducer event that triggered this update.
         events (List[DbEvent]): List of DBEvents that were committed.
     """
 
@@ -217,6 +212,19 @@ class TransactionUpdateMessage(_ClientApiMessage):
         self.reducer_event = ReducerEvent(
             caller_identity, caller_address, reducer_name, status, message, args
         )
+
+
+class TransactionUpdateLightMessage(_ClientApiMessage):
+    """
+    Represents a lightweight transaction update for non-calling clients.
+
+    Introduced in SpaceTimeDB 2.0.  Non-callers receive this message instead
+    of a full TransactionUpdateMessage; it carries table row changes without
+    reducer metadata.
+    """
+
+    def __init__(self):
+        super().__init__("TransactionUpdateLight")
 
 
 class SpacetimeDBClient:
@@ -487,57 +495,146 @@ class SpacetimeDBClient:
         # print("_on_message data: " + data)
         message = json.loads(data)
         if "IdentityToken" in message:
-            # is this safe to do in the message thread?
             token = message["IdentityToken"]["token"]
             identity = Identity.from_string(message["IdentityToken"]["identity"])
-            address = Address.from_string(message["IdentityToken"]["address"])
+            # SpaceTimeDB 2.0 renamed "address" to "connection_id"; support both.
+            addr_str = message["IdentityToken"].get(
+                "connection_id", message["IdentityToken"].get("address", "0" * 32)
+            )
+            address = Address.from_string(addr_str)
             self.message_queue.put(_IdentityReceivedMessage(token, identity, address))
-        elif "SubscriptionUpdate" in message or "TransactionUpdate" in message:
-            clientapi_message = None
-            table_updates = None
-            if "SubscriptionUpdate" in message:
-                clientapi_message = _SubscriptionUpdateMessage()
-                table_updates = message["SubscriptionUpdate"]["table_updates"]
-            if "TransactionUpdate" in message:
-                spacetime_message = message["TransactionUpdate"]
-                # DAB Todo: We need reducer codegen to parse the args
+
+        elif "SubscriptionUpdate" in message:
+            # v1 (legacy) initial subscription
+            clientapi_message = _SubscriptionUpdateMessage()
+            self._parse_v1_table_updates(
+                clientapi_message, message["SubscriptionUpdate"]["table_updates"]
+            )
+            self.message_queue.put(clientapi_message)
+
+        elif "InitialSubscription" in message:
+            # v2 (SpaceTimeDB 2.0) initial subscription
+            clientapi_message = _SubscriptionUpdateMessage()
+            tables = message["InitialSubscription"]["database_update"]["tables"]
+            self._parse_v2_table_updates(clientapi_message, tables)
+            self.message_queue.put(clientapi_message)
+
+        elif "TransactionUpdate" in message:
+            msg = message["TransactionUpdate"]
+            if "event" in msg:
+                # v1 (legacy) TransactionUpdate
                 clientapi_message = TransactionUpdateMessage(
-                    Identity.from_string(spacetime_message["event"]["caller_identity"]),
-                    Address.from_string(spacetime_message["event"]["caller_address"]),
-                    spacetime_message["event"]["status"],
-                    spacetime_message["event"]["message"],
-                    spacetime_message["event"]["function_call"]["reducer"],
-                    json.loads(spacetime_message["event"]["function_call"]["args"]),
+                    Identity.from_string(msg["event"]["caller_identity"]),
+                    Address.from_string(msg["event"]["caller_address"]),
+                    msg["event"]["status"],
+                    msg["event"]["message"],
+                    msg["event"]["function_call"]["reducer"],
+                    json.loads(msg["event"]["function_call"]["args"]),
                 )
-                table_updates = message["TransactionUpdate"]["subscription_update"][
-                    "table_updates"
-                ]
+                self._parse_v1_table_updates(
+                    clientapi_message,
+                    msg["subscription_update"]["table_updates"],
+                )
+            else:
+                # v2 (SpaceTimeDB 2.0) TransactionUpdate
+                status_dict = msg["status"]
+                if "Committed" in status_dict:
+                    status_str = "committed"
+                    err_message = ""
+                    tables = status_dict["Committed"].get("tables", [])
+                elif "Failed" in status_dict:
+                    status_str = "failed"
+                    err_message = status_dict["Failed"]
+                    tables = []
+                else:
+                    # OutOfEnergy or unknown
+                    status_str = list(status_dict.keys())[0].lower()
+                    err_message = ""
+                    tables = []
 
-            for table_update in table_updates:
-                table_name = table_update["table_name"]
+                caller_identity = Identity.from_string(msg["caller_identity"])
+                # 2.0 uses caller_connection_id; fall back to caller_address
+                conn_id_str = msg.get(
+                    "caller_connection_id", msg.get("caller_address", "0" * 32)
+                )
+                caller_address = Address.from_string(conn_id_str)
 
-                for table_row_op in table_update["table_row_operations"]:
-                    row_op = table_row_op["op"]
-                    if row_op == "insert":
-                        decoded_value = self.client_cache.decode(
-                            table_name, table_row_op["row"]
-                        )
-                        clientapi_message.append_event(
-                            table_name,
-                            DbEvent(
-                                table_name,
-                                table_row_op["row_pk"],
-                                row_op,
-                                decoded_value,
-                            ),
-                        )
-                    if row_op == "delete":
-                        clientapi_message.append_event(
-                            table_name,
-                            DbEvent(table_name, table_row_op["row_pk"], row_op),
-                        )
+                reducer_call = msg.get("reducer_call")
+                if reducer_call is not None:
+                    reducer_name = reducer_call["reducer_name"]
+                    args = reducer_call.get("args", [])
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                else:
+                    reducer_name = ""
+                    args = []
+
+                clientapi_message = TransactionUpdateMessage(
+                    caller_identity,
+                    caller_address,
+                    status_str,
+                    err_message,
+                    reducer_name,
+                    args,
+                )
+                self._parse_v2_table_updates(clientapi_message, tables)
 
             self.message_queue.put(clientapi_message)
+
+        elif "TransactionUpdateLight" in message:
+            # v2 non-caller update — table changes only, no reducer info
+            clientapi_message = TransactionUpdateLightMessage()
+            tables = message["TransactionUpdateLight"].get("update", {}).get(
+                "tables", []
+            )
+            self._parse_v2_table_updates(clientapi_message, tables)
+            self.message_queue.put(clientapi_message)
+
+    # ── table-update parsing helpers ──────────────────────────────────────────
+
+    def _parse_v1_table_updates(self, clientapi_message, table_updates):
+        """Parse legacy v1 table_updates (table_row_operations with row_pk)."""
+        for table_update in table_updates:
+            table_name = table_update["table_name"]
+            for table_row_op in table_update["table_row_operations"]:
+                row_op = table_row_op["op"]
+                if row_op == "insert":
+                    decoded_value = self.client_cache.decode(
+                        table_name, table_row_op["row"]
+                    )
+                    clientapi_message.append_event(
+                        table_name,
+                        DbEvent(
+                            table_name,
+                            table_row_op["row_pk"],
+                            row_op,
+                            decoded_value,
+                        ),
+                    )
+                elif row_op == "delete":
+                    clientapi_message.append_event(
+                        table_name,
+                        DbEvent(table_name, table_row_op["row_pk"], row_op),
+                    )
+
+    def _parse_v2_table_updates(self, clientapi_message, tables):
+        """Parse v2 table updates (separate inserts/deletes arrays, no row_pk)."""
+        for table_update in tables:
+            table_name = table_update["table_name"]
+            for query_update in table_update.get("updates", []):
+                for row in query_update.get("inserts", []):
+                    row_pk = json.dumps(row, separators=(",", ":"))
+                    decoded_value = self.client_cache.decode(table_name, row)
+                    clientapi_message.append_event(
+                        table_name,
+                        DbEvent(table_name, row_pk, "insert", decoded_value),
+                    )
+                for row in query_update.get("deletes", []):
+                    row_pk = json.dumps(row, separators=(",", ":"))
+                    clientapi_message.append_event(
+                        table_name,
+                        DbEvent(table_name, row_pk, "delete"),
+                    )
 
     def _do_update(self):
         while not self.message_queue.empty():
