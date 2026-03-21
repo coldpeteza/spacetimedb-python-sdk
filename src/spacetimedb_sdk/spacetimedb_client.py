@@ -1,5 +1,6 @@
 from typing import List, Dict, Callable
 from types import ModuleType
+from collections import defaultdict, deque
 
 import json
 import queue
@@ -281,7 +282,7 @@ class SpacetimeDBClient:
         SpacetimeDBClient.instance = self
 
         self._row_update_callbacks = {}
-        self._reducer_callbacks = {}
+        self._pending_then = defaultdict(deque)
         self._on_subscription_applied = []
         self._on_event = []
 
@@ -468,19 +469,12 @@ class SpacetimeDBClient:
         if table_name in self._row_update_callbacks:
             self._row_update_callbacks[table_name].remove(callback)
 
-    def _register_reducer(self, reducer_name, callback):
-        if reducer_name not in self._reducer_callbacks:
-            self._reducer_callbacks[reducer_name] = []
-
-        self._reducer_callbacks[reducer_name].append(callback)
-
-    def _unregister_reducer(self, reducer_name, callback):
-        if reducer_name in self._reducer_callbacks:
-            self._reducer_callbacks[reducer_name].remove(callback)
-
-    def _reducer_call(self, reducer, *args):
+    def _reducer_call(self, reducer, *args, then=None):
         if not self.wsc.is_connected:
             print("[reducer_call] Not connected")
+
+        if then is not None:
+            self._pending_then[reducer].append(then)
 
         message = {
             "fn": reducer,
@@ -488,7 +482,6 @@ class SpacetimeDBClient:
         }
 
         json_data = json.dumps(message)
-        # print("_reducer_call(JSON): " + json_data)
         self.wsc.send(bytes(f'{{"call": {json_data}}}', "ascii"))
 
     def _on_message(self, data):
@@ -711,23 +704,26 @@ class SpacetimeDBClient:
                         next_message.events[table_name] = table_events
 
                     # now we can apply the events to the cache
+                    # event tables are ephemeral: fire callbacks but don't persist
+                    is_event = self.client_cache.is_event_table(table_name)
                     for db_event in table_events:
                         # print(f"db_event: {db_event.row_op} {table_name}")
-                        if db_event.row_op == "insert" or db_event.row_op == "update":
-                            # in the case of updates we need to delete the old entry
-                            if db_event.row_op == "update":
-                                self.client_cache.delete_entry(
-                                    db_event.table_name, db_event.old_pk
+                        if not is_event:
+                            if db_event.row_op == "insert" or db_event.row_op == "update":
+                                # in the case of updates we need to delete the old entry
+                                if db_event.row_op == "update":
+                                    self.client_cache.delete_entry(
+                                        db_event.table_name, db_event.old_pk
+                                    )
+                                self.client_cache.set_entry_decoded(
+                                    db_event.table_name,
+                                    db_event.row_pk,
+                                    db_event.decoded_value,
                                 )
-                            self.client_cache.set_entry_decoded(
-                                db_event.table_name,
-                                db_event.row_pk,
-                                db_event.decoded_value,
-                            )
-                        elif db_event.row_op == "delete":
-                            self.client_cache.delete_entry(
-                                db_event.table_name, db_event.row_pk
-                            )
+                            elif db_event.row_op == "delete":
+                                self.client_cache.delete_entry(
+                                    db_event.table_name, db_event.row_pk
+                                )
 
                 # now that we have applied the state we can call the callbacks
                 for table_events in next_message.events.values():
@@ -759,23 +755,9 @@ class SpacetimeDBClient:
                     for event_callback in self._on_event:
                         event_callback(next_message)
 
-                    # call reducer callback
+                    # invoke per-call _then() callback if one is pending
                     reducer_event = next_message.reducer_event
-                    if reducer_event.reducer_name in self._reducer_callbacks:
-                        args = []
-                        decode_func = self.client_cache.reducer_cache[
-                            reducer_event.reducer_name
-                        ]
-
-                        args = decode_func(reducer_event.args)
-
-                        for reducer_callback in self._reducer_callbacks[
-                            reducer_event.reducer_name
-                        ]:
-                            reducer_callback(
-                                reducer_event.caller_identity,
-                                reducer_event.caller_address,
-                                reducer_event.status,
-                                reducer_event.message,
-                                *args,
-                            )
+                    reducer_name = reducer_event.reducer_name
+                    if reducer_name and self._pending_then[reducer_name]:
+                        then_callback = self._pending_then[reducer_name].popleft()
+                        then_callback(reducer_event)

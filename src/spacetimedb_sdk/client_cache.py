@@ -7,9 +7,10 @@ def snake_to_camel(snake_case_string):
 
 
 class TableCache:
-    def __init__(self, table_class):
+    def __init__(self, table_class, is_event_table=False):
         self.entries = {}
         self.table_class = table_class
+        self.is_event_table = is_event_table
 
     def decode(self, value):
         return self.table_class(value)
@@ -61,10 +62,15 @@ class ClientCache:
 
                         # Check for a special property, e.g. 'is_table_class'
                         if getattr(table_class, "is_table_class", False):
-                            self.tables[table_class_name] = TableCache(table_class)
+                            is_event = getattr(table_class, "is_event_table", False)
+                            self.tables[table_class_name] = TableCache(table_class, is_event_table=is_event)
 
     def get_table_cache(self, table_name):
         return self.tables[table_name]
+
+    def is_event_table(self, table_name):
+        cache = self.tables.get(table_name)
+        return cache is not None and cache.is_event_table
 
     def decode(self, table_name, value):
         if not table_name in self.tables:
