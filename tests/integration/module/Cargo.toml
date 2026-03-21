@@ -1,0 +1,12 @@
+[package]
+name = "chat"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# "1" resolves to the latest 1.x on crates.io, which is API-compatible with
+# the clockworklabs/spacetime:latest Docker image.
+spacetimedb = "1"

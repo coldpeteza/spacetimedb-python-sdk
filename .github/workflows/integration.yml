@@ -1,0 +1,95 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:   # allow manual runs
+
+jobs:
+  integration:
+    name: "Integration — SpacetimeDB + Python SDK"
+    runs-on: ubuntu-latest
+
+    # ── Container 1 ────────────────────────────────────────────────────────
+    # SpacetimeDB server — exposes port 3000 to the job runner.
+    # The service is started by GitHub Actions before any step runs.
+    services:
+      spacetimedb:
+        image: clockworklabs/spacetime:latest
+        ports:
+          - 3000:3000
+        options: >-
+          --health-cmd "curl -sf http://localhost:3000/health"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Build the chat module ─────────────────────────────────────────────
+      # Container 2: run the spacetime CLI from the same Docker image to
+      # build the WASM module inside a container that carries the exact
+      # spacetimedb crate version matching the server.  Cargo dependencies
+      # are cached on the host and volume-mounted for speed.
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('tests/integration/module/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-integration-
+
+      - name: Build module WASM (spacetime build container)
+        run: |
+          docker run --rm \
+            -v "$HOME/.cargo/registry:/root/.cargo/registry" \
+            -v "$HOME/.cargo/git:/root/.cargo/git" \
+            -v "${{ github.workspace }}/tests/integration/module:/module" \
+            -w /module \
+            clockworklabs/spacetime:latest \
+            build --project-path .
+
+      # ── Publish the module to the running server ──────────────────────────
+      # Re-use the same image (network=host so localhost:3000 resolves to the
+      # service container started above).
+      - name: Publish chat module to SpacetimeDB
+        run: |
+          WASM="${{ github.workspace }}/tests/integration/module/target/wasm32-unknown-unknown/release/chat.wasm"
+          docker run --rm \
+            --network host \
+            -v "$WASM:/chat.wasm:ro" \
+            clockworklabs/spacetime:latest \
+            publish \
+              --server http://localhost:3000 \
+              --bin-path /chat.wasm \
+              --yes \
+              chat
+
+      # ── Python test runner ────────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          pip install \
+            pytest \
+            pytest-asyncio \
+            "websockets>=10.0" \
+            websocket-client
+
+      - name: Install SDK (editable, no Rust build)
+        run: pip install --no-build-isolation --no-deps -e .
+
+      - name: Run integration tests
+        env:
+          SPACETIMEDB_HOST: "localhost:3000"
+          SPACETIMEDB_MODULE: "chat"
+          SPACETIMEDB_TIMEOUT: "20"
+        run: PYTHONPATH=src pytest tests/integration/ -v --tb=short
