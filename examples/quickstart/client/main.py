@@ -8,6 +8,7 @@ import spacetimedb_sdk.local_config as local_config
 import module_bindings
 from module_bindings.user import User
 from module_bindings.message import Message
+from module_bindings.system_notification import SystemNotification
 import module_bindings.send_message_reducer as send_message_reducer
 import module_bindings.set_name_reducer as set_name_reducer
 
@@ -18,7 +19,7 @@ local_identity = None
 def run_client(spacetime_client):
     asyncio.run(
         spacetime_client.run(
-            local_config.get_string("auth_token"),
+            local_config.get_token(),
             "localhost:3000",
             "chat",
             False,
@@ -45,7 +46,7 @@ def on_connect(auth_token, identity):
     global local_identity
     local_identity = identity
 
-    local_config.set_string("auth_token", auth_token)
+    local_config.set_token(auth_token)
 
 
 def check_commands():
@@ -54,9 +55,19 @@ def check_commands():
     if not input_queue.empty():
         choice = input_queue.get()
         if choice[0] == "name":
-            set_name_reducer.set_name(choice[1])
+            set_name_reducer.set_name(
+                choice[1],
+                then=lambda evt: print(f"Failed to set name: {evt.message}")
+                if evt.status == "failed"
+                else None,
+            )
         else:
-            send_message_reducer.send_message(choice[1])
+            send_message_reducer.send_message(
+                choice[1],
+                then=lambda evt: print(f"Failed to send message: {evt.message}")
+                if evt.status == "failed"
+                else None,
+            )
 
     spacetime_client.schedule_event(0.1, check_commands)
 
@@ -72,18 +83,6 @@ def print_messages_in_order():
 def on_subscription_applied():
     print(f"\nSYSTEM: Connected.")
     print_messages_in_order()
-
-
-def on_send_message_reducer(sender_id, sender_address, status, message, msg):
-    if sender_id == local_identity:
-        if status == "failed":
-            print(f"Failed to send message: {message}")
-
-
-def on_set_name_reducer(sender_id, sender_address, status, message, name):
-    if sender_id == local_identity:
-        if status == "failed":
-            print(f"Failed to set name: {message}")
 
 
 def on_message_row_update(row_op, message_old, message, reducer_event):
@@ -123,14 +122,17 @@ def on_user_row_update(row_op, user_old, user, reducer_event):
             )
 
 
+def on_system_notification(row_op, _old, notification, reducer_event):
+    if row_op == "insert":
+        print(f"[{notification.level.upper()}] {notification.message}")
+
+
 def register_callbacks(spacetime_client):
     spacetime_client.register_on_subscription_applied(on_subscription_applied)
 
     User.register_row_update(on_user_row_update)
     Message.register_row_update(on_message_row_update)
-
-    set_name_reducer.register_on_set_name(on_set_name_reducer)
-    send_message_reducer.register_on_send_message(on_send_message_reducer)
+    SystemNotification.register_row_update(on_system_notification)
 
     spacetime_client.schedule_event(0.1, check_commands)
 
