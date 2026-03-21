@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools", "wheel", "build"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "spacetimedb_sdk"
@@ -20,3 +20,12 @@ readme = "README.md"
 [project.urls]
 homepage = "https://spacetimedb.com"
 repository = "https://github.com/clockworklabs/spacetimedb-python-sdk"
+
+[tool.maturin]
+# Python source lives under src/
+python-source = "src"
+# The Rust extension module name (must match #[pymodule] fn name in lib.rs)
+module-name = "bsatn_native"
+# Path to the Rust crate manifest
+manifest-path = "bsatn_native/Cargo.toml"
+features = ["pyo3/extension-module"]
