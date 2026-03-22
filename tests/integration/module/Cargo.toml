@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-# "1" resolves to the latest 1.x on crates.io, which is API-compatible with
-# the clockworklabs/spacetime:latest Docker image.
-spacetimedb = "1"
+# "2" targets the SpacetimeDB v2 server (clockworklabs/spacetime:latest).
+# Using "1" or "0.x" produces an incompatible ABI that the v2 server rejects
+# with "unable to determine ABI of module (may be on an spacetime version < 0.8)".
+spacetimedb = "2"
