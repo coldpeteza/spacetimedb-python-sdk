@@ -1,89 +1,84 @@
-use spacetimedb::{spacetimedb, ReducerContext, Identity, Timestamp};
-use anyhow::{Result, anyhow};
+use spacetimedb::ReducerContext;
 
-#[spacetimedb(table)]
+// ── Tables ─────────────────────────────────────────────────────────────────
+
+#[spacetimedb::table(public)]
 pub struct User {
-    #[primarykey]
-    identity: Identity,
+    #[primary_key]
+    identity: spacetimedb::Identity,
     name: Option<String>,
     online: bool,
 }
 
-#[spacetimedb(table)]
+#[spacetimedb::table(public)]
 pub struct Message {
-    sender: Identity,
-    sent: Timestamp,
+    sender: spacetimedb::Identity,
+    sent: spacetimedb::Timestamp,
     text: String,
 }
 
-#[spacetimedb(init)]
-pub fn init() {
-    // Called when the module is initially published
+// ── Lifecycle reducers ──────────────────────────────────────────────────────
+
+#[spacetimedb::reducer(init)]
+pub fn init(_ctx: &ReducerContext) {
+    // Called when the module is initially published.
 }
 
-#[spacetimedb(connect)]
-pub fn identity_connected(ctx: ReducerContext) {
-    if let Some(user) = User::filter_by_identity(&ctx.sender) {
-        // If this is a returning user, i.e. we already have a `User` with this `Identity`,
-        // set `online: true`, but leave `name` and `identity` unchanged.
-        User::update_by_identity(&ctx.sender, User { online: true, ..user });
+#[spacetimedb::reducer(client_connected)]
+pub fn identity_connected(ctx: &ReducerContext) {
+    if let Some(user) = ctx.db.user().identity().find(ctx.sender()) {
+        // Returning user — mark online, preserve name and identity.
+        ctx.db.user().identity().update(User { online: true, ..user });
     } else {
-        // If this is a new user, create a `User` row for the `Identity`,
-        // which is online, but hasn't set a name.
-        User::insert(User {
+        // New user — create a row for this identity.
+        ctx.db.user().insert(User {
+            identity: ctx.sender(),
             name: None,
-            identity: ctx.sender,
             online: true,
-        }).unwrap();
+        });
     }
 }
 
-#[spacetimedb(disconnect)]
-pub fn identity_disconnected(ctx: ReducerContext) {
-    if let Some(user) = User::filter_by_identity(&ctx.sender) {
-        User::update_by_identity(&ctx.sender, User { online: false, ..user });
+#[spacetimedb::reducer(client_disconnected)]
+pub fn identity_disconnected(ctx: &ReducerContext) {
+    if let Some(user) = ctx.db.user().identity().find(ctx.sender()) {
+        ctx.db.user().identity().update(User { online: false, ..user });
     } else {
-        // This branch should be unreachable,
-        // as it doesn't make sense for a client to disconnect without connecting first.
-        log::warn!("Disconnect event for unknown user with identity {:?}", ctx.sender);
+        // Should be unreachable: a client cannot disconnect without connecting first.
+        log::warn!(
+            "Disconnect event for unknown user with identity {:?}",
+            ctx.sender()
+        );
     }
 }
 
-fn validate_name(name: String) -> Result<String> {
+// ── Business reducers ───────────────────────────────────────────────────────
+
+#[spacetimedb::reducer]
+pub fn set_name(ctx: &ReducerContext, name: String) -> Result<(), String> {
     if name.is_empty() {
-        Err(anyhow!("Names must not be empty"))
-    } else {
-        Ok(name)
+        return Err("Names must not be empty".into());
+    }
+    match ctx.db.user().identity().find(ctx.sender()) {
+        Some(user) => {
+            ctx.db
+                .user()
+                .identity()
+                .update(User { name: Some(name), ..user });
+            Ok(())
+        }
+        None => Err("Cannot set name for unknown user".into()),
     }
 }
 
-#[spacetimedb(reducer)]
-pub fn set_name(ctx: ReducerContext, name: String) -> Result<()> {
-    let name = validate_name(name)?;
-    if let Some(user) = User::filter_by_identity(&ctx.sender) {
-        User::update_by_identity(&ctx.sender, User { name: Some(name), ..user });
-        Ok(())
-    } else {
-        Err(anyhow!("Cannot set name for unknown user"))
-    }
-}
-
-fn validate_message(text: String) -> Result<String> {
+#[spacetimedb::reducer]
+pub fn send_message(ctx: &ReducerContext, text: String) -> Result<(), String> {
+    // Consider: rate-limit per user, reject messages from unnamed users.
     if text.is_empty() {
-        Err(anyhow!("Messages must not be empty"))
-    } else {
-        Ok(text)
+        return Err("Messages must not be empty".into());
     }
-}
-
-#[spacetimedb(reducer)]
-pub fn send_message(ctx: ReducerContext, text: String) -> Result<()> {
-    // Things to consider:
-    // - Rate-limit messages per-user.
-    // - Reject messages from unnamed users.
-    let text = validate_message(text)?;
-    Message::insert(Message {
-        sender: ctx.sender,
+    ctx.db.message().insert(Message {
+        sender: ctx.sender(),
         text,
         sent: ctx.timestamp,
     });
