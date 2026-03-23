@@ -32,7 +32,17 @@ class Identity:
         Returns:
             Identity: The Identity object.
         """
-        return Identity(bytes.fromhex(string))
+        if isinstance(string, str):
+            return Identity(bytes.fromhex(string.removeprefix("0x")))
+        raise TypeError(f"Expected str, got {type(string).__name__}")
+
+    @staticmethod
+    def from_json(value):
+        """Parse an Identity from a v2 JSON value (dict with __identity__ key) or a plain hex string."""
+        if isinstance(value, dict):
+            hex_str = value.get("__identity__", "")
+            return Identity.from_string(hex_str)
+        return Identity.from_string(value)
 
     @staticmethod
     def from_bytes(data):
@@ -81,11 +91,26 @@ class Address:
         Returns:
             Address: The Address object.
         """
-        address_bytes = bytes.fromhex(string)
+        if isinstance(string, str):
+            address_bytes = bytes.fromhex(string.removeprefix("0x"))
+        else:
+            raise TypeError(f"Expected str, got {type(string).__name__}")
         if all(byte == 0 for byte in address_bytes):
             return None
         else:
             return Address(address_bytes)
+
+    @staticmethod
+    def from_json(value):
+        """Parse an Address from a v2 JSON value (dict with __connection_id__) or a plain hex string."""
+        if isinstance(value, dict):
+            # v2 format: {"__connection_id__": <integer>}
+            conn_id = value.get("__connection_id__", 0)
+            if isinstance(conn_id, int):
+                hex_str = format(conn_id, "032x")
+                return Address.from_string(hex_str)
+            return Address.from_string(str(conn_id).removeprefix("0x"))
+        return Address.from_string(value)
 
     @staticmethod
     def from_bytes(data):
@@ -311,7 +336,7 @@ class SpacetimeDBClient:
         self._on_error = on_error
 
         self.wsc = WebSocketClient(
-            "v1.text.spacetimedb",
+            "v1.json.spacetimedb",
             on_connect=on_connect,
             on_error=on_error,
             on_close=on_disconnect,
@@ -370,10 +395,13 @@ class SpacetimeDBClient:
             queries = ["SELECT * FROM table1", "SELECT * FROM table2 WHERE col2 = 0"]
             SpacetimeDBClient.instance.subscribe(queries)
         """
-        json_data = json.dumps(queries)
-        self.wsc.send(
-            bytes(f'{{"subscribe": {{ "query_strings": {json_data}}}}}', "ascii")
-        )
+        message = {
+            "Subscribe": {
+                "query_strings": queries,
+                "request_id": 0,
+            }
+        }
+        self.wsc.send(json.dumps(message))
 
     def register_on_subscription_applied(self, callback: Callable[[], None]):
         """
@@ -477,24 +505,25 @@ class SpacetimeDBClient:
             self._pending_then[reducer].append(then)
 
         message = {
-            "fn": reducer,
-            "args": args,
+            "CallReducer": {
+                "reducer": reducer,
+                "args": json.dumps(list(args)),
+                "request_id": 0,
+                "flags": 0,
+            }
         }
-
-        json_data = json.dumps(message)
-        self.wsc.send(bytes(f'{{"call": {json_data}}}', "ascii"))
+        self.wsc.send(json.dumps(message))
 
     def _on_message(self, data):
-        # print("_on_message data: " + data)
         message = json.loads(data)
         if "IdentityToken" in message:
             token = message["IdentityToken"]["token"]
-            identity = Identity.from_string(message["IdentityToken"]["identity"])
+            identity = Identity.from_json(message["IdentityToken"]["identity"])
             # SpaceTimeDB 2.0 renamed "address" to "connection_id"; support both.
-            addr_str = message["IdentityToken"].get(
+            addr_value = message["IdentityToken"].get(
                 "connection_id", message["IdentityToken"].get("address", "0" * 32)
             )
-            address = Address.from_string(addr_str)
+            address = Address.from_json(addr_value)
             self.message_queue.put(_IdentityReceivedMessage(token, identity, address))
 
         elif "SubscriptionUpdate" in message:
@@ -517,8 +546,8 @@ class SpacetimeDBClient:
             if "event" in msg:
                 # v1 (legacy) TransactionUpdate
                 clientapi_message = TransactionUpdateMessage(
-                    Identity.from_string(msg["event"]["caller_identity"]),
-                    Address.from_string(msg["event"]["caller_address"]),
+                    Identity.from_json(msg["event"]["caller_identity"]),
+                    Address.from_json(msg["event"]["caller_address"]),
                     msg["event"]["status"],
                     msg["event"]["message"],
                     msg["event"]["function_call"]["reducer"],
@@ -545,12 +574,12 @@ class SpacetimeDBClient:
                     err_message = ""
                     tables = []
 
-                caller_identity = Identity.from_string(msg["caller_identity"])
+                caller_identity = Identity.from_json(msg["caller_identity"])
                 # 2.0 uses caller_connection_id; fall back to caller_address
-                conn_id_str = msg.get(
+                conn_id_value = msg.get(
                     "caller_connection_id", msg.get("caller_address", "0" * 32)
                 )
-                caller_address = Address.from_string(conn_id_str)
+                caller_address = Address.from_json(conn_id_value)
 
                 reducer_call = msg.get("reducer_call")
                 if reducer_call is not None:

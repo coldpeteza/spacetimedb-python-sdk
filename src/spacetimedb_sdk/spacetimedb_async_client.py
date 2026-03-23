@@ -194,7 +194,7 @@ class SpacetimeDBAsyncClient:
         if not self.event_queue:
             self._on_async_loop_start()
 
-        self._aws = AsyncWebSocketClient("v1.text.spacetimedb")
+        self._aws = AsyncWebSocketClient("v1.json.spacetimedb")
         await self._aws.connect(auth_token, host, address_or_name, ssl_enabled)
 
         # Attach a sync-compatible shim so _reducer_call() / subscribe() work.

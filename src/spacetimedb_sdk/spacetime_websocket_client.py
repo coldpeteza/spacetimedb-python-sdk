@@ -54,7 +54,7 @@ class WebSocketClient:
 
     def connect(self, auth, host, name_or_address, ssl_enabled):
         protocol = "wss" if ssl_enabled else "ws"
-        url = f"{protocol}://{host}/database/subscribe/{name_or_address}"
+        url = f"{protocol}://{host}/v1/database/{name_or_address}/subscribe"
 
         if self.client_address is not None:
             url += f"?client_address={self.client_address}"
@@ -134,7 +134,7 @@ class AsyncWebSocketClient:
     async def connect(self, auth_token: str, host: str, name_or_address: str, ssl_enabled: bool):
         """Open the WebSocket connection to the SpacetimeDB server."""
         proto = "wss" if ssl_enabled else "ws"
-        url = f"{proto}://{host}/database/subscribe/{name_or_address}"
+        url = f"{proto}://{host}/v1/database/{name_or_address}/subscribe"
 
         headers = _build_auth_headers(auth_token)
         additional_headers = dict(headers) if headers else {}
