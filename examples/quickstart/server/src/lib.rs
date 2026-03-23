@@ -2,7 +2,7 @@ use spacetimedb::{ReducerContext, Table};
 
 // ── Tables ─────────────────────────────────────────────────────────────────
 
-#[spacetimedb::table(public, accessor = user)]
+#[spacetimedb::table(accessor = user, public)]
 pub struct User {
     #[primary_key]
     identity: spacetimedb::Identity,
@@ -10,7 +10,7 @@ pub struct User {
     online: bool,
 }
 
-#[spacetimedb::table(public, accessor = message)]
+#[spacetimedb::table(accessor = message, public)]
 pub struct Message {
     sender: spacetimedb::Identity,
     sent: spacetimedb::Timestamp,
